@@ -1,0 +1,772 @@
+// Enhanced Prisma schema for comprehensive NAMC Member Portal
+// This schema supports the full feature set including RBAC, notifications, 
+// audit trails, payments, LMS, and project management
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"  // Upgraded from SQLite for production
+  url      = env("DATABASE_URL")
+}
+
+// ==================== CORE MODELS ====================
+
+model User {
+  id                    String    @id @default(cuid())
+  email                 String    @unique
+  password              String
+  firstName             String
+  lastName              String
+  company               String?
+  phone                 String?
+  address               String?
+  city                  String?
+  state                 String?
+  zipCode               String?
+  memberType            MemberType @default(REGULAR)
+  memberSince           DateTime  @default(now())
+  membershipExpiresAt   DateTime?
+  isActive              Boolean   @default(true)
+  isVerified            Boolean   @default(false)
+  profileImage          String?
+  bio                   String?
+  website               String?
+  linkedin              String?
+  twitter               String?
+  
+  // Enhanced security fields
+  failedLoginAttempts   Int       @default(0)
+  lockedUntil           DateTime?
+  lastFailedLogin       DateTime?
+  lastSuccessfulLogin   DateTime?
+  twoFactorEnabled      Boolean   @default(false)
+  twoFactorSecret       String?
+  
+  // Notification preferences
+  emailNotifications    Boolean   @default(true)
+  smsNotifications      Boolean   @default(false)
+  pushNotifications     Boolean   @default(true)
+  
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  // Enhanced relations
+  roles                 UserRole[]
+  events                EventRegistration[]
+  createdEvents         Event[] @relation("EventCreator")
+  messages              Message[] @relation("MessageSender")
+  receivedMessages      Message[] @relation("MessageReceiver")
+  announcements         Announcement[] @relation("AnnouncementCreator")
+  resources             Resource[] @relation("ResourceCreator")
+  adminActions          AdminAction[] @relation("AdminActionUser")
+  auditLogs             AuditLog[] @relation("AuditLogUser")
+  notifications         Notification[]
+  payments              Payment[]
+  membershipTiers       MembershipTier[] @relation("MembershipTierMembers")
+  projects              ProjectApplication[]
+  referrals             Referral[] @relation("ReferralReferrer")
+  referredBy            Referral[] @relation("ReferralReferred")
+  courses               CourseEnrollment[]
+  certificates          Certificate[]
+  feedbackGiven         AIFeedback[]
+
+  @@map("users")
+}
+
+// ==================== RBAC SYSTEM ====================
+
+model Role {
+  id          String @id @default(cuid())
+  name        String @unique
+  description String
+  isActive    Boolean @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  users       UserRole[]
+  permissions RolePermission[]
+
+  @@map("roles")
+}
+
+model Permission {
+  id          String @id @default(cuid())
+  name        String @unique
+  description String
+  resource    String  // e.g., "users", "events", "payments"
+  action      String  // e.g., "create", "read", "update", "delete"
+  createdAt   DateTime @default(now())
+  
+  roles       RolePermission[]
+
+  @@map("permissions")
+}
+
+model UserRole {
+  id      String @id @default(cuid())
+  userId  String
+  roleId  String
+  assignedAt DateTime @default(now())
+  assignedBy String?
+  
+  user    User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role    Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, roleId])
+  @@map("user_roles")
+}
+
+model RolePermission {
+  id           String @id @default(cuid())
+  roleId       String
+  permissionId String
+  
+  role         Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+// ==================== NOTIFICATION SYSTEM ====================
+
+model Notification {
+  id        String @id @default(cuid())
+  userId    String
+  type      NotificationType
+  title     String
+  message   String
+  data      Json?  // Additional structured data
+  channel   NotificationChannel @default(IN_APP)
+  isRead    Boolean @default(false)
+  readAt    DateTime?
+  createdAt DateTime @default(now())
+  
+  user      User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("notifications")
+}
+
+model NotificationTemplate {
+  id          String @id @default(cuid())
+  name        String @unique
+  type        NotificationType
+  subject     String
+  template    String  // Template with placeholders
+  isActive    Boolean @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("notification_templates")
+}
+
+// ==================== AUDIT SYSTEM ====================
+
+model AuditLog {
+  id          String @id @default(cuid())
+  userId      String?
+  action      String
+  resource    String
+  resourceId  String?
+  oldData     Json?
+  newData     Json?
+  ipAddress   String?
+  userAgent   String?
+  timestamp   DateTime @default(now())
+  
+  user        User? @relation("AuditLogUser", fields: [userId], references: [id])
+
+  @@map("audit_logs")
+}
+
+// ==================== MEMBERSHIP SYSTEM ====================
+
+model MembershipTier {
+  id            String @id @default(cuid())
+  name          String @unique
+  description   String
+  price         Float
+  duration      Int  // Duration in months
+  benefits      String[]
+  isActive      Boolean @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  
+  members       User[] @relation("MembershipTierMembers")
+  payments      Payment[]
+
+  @@map("membership_tiers")
+}
+
+model MembershipRenewal {
+  id            String @id @default(cuid())
+  userId        String
+  oldTier       String
+  newTier       String
+  renewalDate   DateTime
+  expiryDate    DateTime
+  amount        Float
+  status        RenewalStatus @default(PENDING)
+  createdAt     DateTime @default(now())
+  
+  @@map("membership_renewals")
+}
+
+// ==================== PAYMENT SYSTEM ====================
+
+model Payment {
+  id              String @id @default(cuid())
+  userId          String
+  membershipTierId String?
+  amount          Float
+  currency        String @default("USD")
+  status          PaymentStatus @default(PENDING)
+  paymentMethod   PaymentMethod
+  stripePaymentId String?
+  stripeSessionId String?
+  description     String
+  metadata        Json?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  user            User @relation(fields: [userId], references: [id])
+  membershipTier  MembershipTier? @relation(fields: [membershipTierId], references: [id])
+
+  @@map("payments")
+}
+
+model Invoice {
+  id          String @id @default(cuid())
+  userId      String
+  invoiceNumber String @unique
+  amount      Float
+  tax         Float @default(0)
+  total       Float
+  status      InvoiceStatus @default(DRAFT)
+  dueDate     DateTime
+  paidAt      DateTime?
+  items       Json  // Array of invoice items
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("invoices")
+}
+
+// ==================== PROJECT MANAGEMENT ====================
+
+model Project {
+  id              String @id @default(cuid())
+  title           String
+  description     String
+  category        ProjectCategory
+  budget          Float?
+  location        String?
+  startDate       DateTime?
+  endDate         DateTime?
+  status          ProjectStatus @default(OPEN)
+  requirements    String[]
+  skills          String[]
+  createdBy       String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  applications    ProjectApplication[]
+
+  @@map("projects")
+}
+
+model ProjectApplication {
+  id          String @id @default(cuid())
+  projectId   String
+  userId      String
+  proposal    String
+  experience  String
+  timeline    String
+  budget      Float?
+  status      ApplicationStatus @default(PENDING)
+  submittedAt DateTime @default(now())
+  reviewedAt  DateTime?
+  reviewedBy  String?
+  
+  project     Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user        User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, userId])
+  @@map("project_applications")
+}
+
+// ==================== LMS SYSTEM ====================
+
+model Course {
+  id            String @id @default(cuid())
+  title         String
+  description   String
+  instructor    String
+  category      String
+  difficulty    CourseLevel @default(BEGINNER)
+  duration      Int  // Duration in minutes
+  price         Float @default(0)
+  isPublished   Boolean @default(false)
+  thumbnailUrl  String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  
+  modules       CourseModule[]
+  enrollments   CourseEnrollment[]
+  certificates  Certificate[]
+
+  @@map("courses")
+}
+
+model CourseModule {
+  id          String @id @default(cuid())
+  courseId    String
+  title       String
+  description String?
+  order       Int
+  duration    Int  // Duration in minutes
+  isPublished Boolean @default(false)
+  
+  course      Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  lessons     Lesson[]
+
+  @@map("course_modules")
+}
+
+model Lesson {
+  id          String @id @default(cuid())
+  moduleId    String
+  title       String
+  content     String
+  type        LessonType @default(TEXT)
+  videoUrl    String?
+  duration    Int?  // Duration in minutes
+  order       Int
+  isPublished Boolean @default(false)
+  
+  module      CourseModule @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  progress    LessonProgress[]
+  assessments Assessment[]
+
+  @@map("lessons")
+}
+
+model Assessment {
+  id          String @id @default(cuid())
+  lessonId    String?
+  courseId    String?
+  title       String
+  type        AssessmentType @default(QUIZ)
+  questions   Json  // Array of questions with answers
+  passingScore Float @default(70)
+  timeLimit   Int?  // Time limit in minutes
+  attempts    Int @default(3)
+  
+  lesson      Lesson? @relation(fields: [lessonId], references: [id])
+  submissions AssessmentSubmission[]
+
+  @@map("assessments")
+}
+
+model CourseEnrollment {
+  id          String @id @default(cuid())
+  userId      String
+  courseId    String
+  enrolledAt  DateTime @default(now())
+  completedAt DateTime?
+  progress    Float @default(0)
+  status      EnrollmentStatus @default(ACTIVE)
+  
+  user        User @relation(fields: [userId], references: [id])
+  course      Course @relation(fields: [courseId], references: [id])
+
+  @@unique([userId, courseId])
+  @@map("course_enrollments")
+}
+
+model LessonProgress {
+  id          String @id @default(cuid())
+  userId      String
+  lessonId    String
+  completed   Boolean @default(false)
+  completedAt DateTime?
+  timeSpent   Int @default(0)  // Time spent in minutes
+  
+  lesson      Lesson @relation(fields: [lessonId], references: [id])
+
+  @@unique([userId, lessonId])
+  @@map("lesson_progress")
+}
+
+model AssessmentSubmission {
+  id           String @id @default(cuid())
+  userId       String
+  assessmentId String
+  answers      Json
+  score        Float
+  passed       Boolean
+  submittedAt  DateTime @default(now())
+  
+  assessment   Assessment @relation(fields: [assessmentId], references: [id])
+
+  @@map("assessment_submissions")
+}
+
+model Certificate {
+  id          String @id @default(cuid())
+  userId      String
+  courseId    String
+  issuedAt    DateTime @default(now())
+  expiresAt   DateTime?
+  certificateUrl String
+  verificationCode String @unique
+  
+  user        User @relation(fields: [userId], references: [id])
+  course      Course @relation(fields: [courseId], references: [id])
+
+  @@unique([userId, courseId])
+  @@map("certificates")
+}
+
+// ==================== REFERRAL SYSTEM ====================
+
+model Referral {
+  id          String @id @default(cuid())
+  referrerId  String
+  referredId  String?
+  code        String @unique
+  email       String
+  status      ReferralStatus @default(PENDING)
+  commission  Float @default(0)
+  paidAt      DateTime?
+  createdAt   DateTime @default(now())
+  
+  referrer    User @relation("ReferralReferrer", fields: [referrerId], references: [id])
+  referred    User? @relation("ReferralReferred", fields: [referredId], references: [id])
+
+  @@map("referrals")
+}
+
+model CommissionRule {
+  id            String @id @default(cuid())
+  tierLevel     String
+  percentage    Float
+  flatAmount    Float @default(0)
+  minimumSale   Float @default(0)
+  isActive      Boolean @default(true)
+  createdAt     DateTime @default(now())
+
+  @@map("commission_rules")
+}
+
+// ==================== AI SYSTEM ====================
+
+model AIFeedback {
+  id          String @id @default(cuid())
+  userId      String
+  feature     String  // e.g., "contract_analyzer", "business_growth"
+  input       String
+  output      String
+  rating      Int  // 1-5 scale
+  feedback    String?
+  isAccurate  Boolean?
+  createdAt   DateTime @default(now())
+  
+  user        User @relation(fields: [userId], references: [id])
+
+  @@map("ai_feedback")
+}
+
+model AIModel {
+  id          String @id @default(cuid())
+  name        String @unique
+  version     String
+  type        String  // e.g., "question_answering", "text_classification"
+  accuracy    Float?
+  isActive    Boolean @default(true)
+  config      Json
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("ai_models")
+}
+
+// ==================== ENHANCED EXISTING MODELS ====================
+
+model Event {
+  id          String    @id @default(cuid())
+  title       String
+  description String
+  startDate   DateTime
+  endDate     DateTime
+  location    String?
+  isVirtual   Boolean   @default(false)
+  meetingLink String?
+  maxAttendees Int?
+  isActive    Boolean   @default(true)
+  category    EventCategory @default(GENERAL)
+  price       Float     @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  createdBy   String
+
+  registrations EventRegistration[]
+
+  @@map("events")
+}
+
+model EventRegistration {
+  id        String   @id @default(cuid())
+  eventId   String
+  userId    String
+  status    RegistrationStatus @default(REGISTERED)
+  registeredAt DateTime @default(now())
+  paymentId String?
+  
+  event     Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, userId])
+  @@map("event_registrations")
+}
+
+model Message {
+  id        String   @id @default(cuid())
+  senderId  String
+  receiverId String
+  subject   String
+  content   String
+  isRead    Boolean  @default(false)
+  priority  MessagePriority @default(NORMAL)
+  category  MessageCategory @default(GENERAL)
+  createdAt DateTime @default(now())
+  
+  sender    User     @relation("MessageSender", fields: [senderId], references: [id], onDelete: Cascade)
+  receiver  User     @relation("MessageReceiver", fields: [receiverId], references: [id], onDelete: Cascade)
+
+  @@map("messages")
+}
+
+model Announcement {
+  id        String   @id @default(cuid())
+  title     String
+  content   String
+  priority  AnnouncementPriority @default(NORMAL)
+  category  String?
+  isActive  Boolean  @default(true)
+  publishAt DateTime @default(now())
+  expiresAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  createdBy String
+
+  @@map("announcements")
+}
+
+model Resource {
+  id          String   @id @default(cuid())
+  title       String
+  description String?
+  fileUrl     String
+  fileType    String
+  fileSize    Int
+  category    ResourceCategory @default(GENERAL)
+  isPublic    Boolean  @default(true)
+  downloadCount Int    @default(0)
+  tags        String[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  createdBy   String
+
+  @@map("resources")
+}
+
+model AdminAction {
+  id        String   @id @default(cuid())
+  action    String
+  details   String
+  severity  ActionSeverity @default(INFO)
+  createdAt DateTime @default(now())
+  userId    String
+
+  @@map("admin_actions")
+}
+
+// ==================== ENUMS ====================
+
+enum MemberType {
+  REGULAR
+  PREMIUM
+  LIFETIME
+  HONORARY
+  ADMIN
+}
+
+enum PaymentStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  REFUNDED
+  CANCELLED
+}
+
+enum PaymentMethod {
+  CREDIT_CARD
+  BANK_TRANSFER
+  PAYPAL
+  STRIPE
+  CHECK
+}
+
+enum InvoiceStatus {
+  DRAFT
+  SENT
+  PAID
+  OVERDUE
+  CANCELLED
+}
+
+enum RenewalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  EXPIRED
+}
+
+enum NotificationType {
+  MEMBERSHIP_EXPIRY
+  PAYMENT_SUCCESS
+  PAYMENT_FAILED
+  EVENT_REMINDER
+  MESSAGE_RECEIVED
+  COURSE_COMPLETED
+  CERTIFICATE_ISSUED
+  PROJECT_ASSIGNED
+  SYSTEM_ANNOUNCEMENT
+}
+
+enum NotificationChannel {
+  IN_APP
+  EMAIL
+  SMS
+  PUSH
+}
+
+enum ProjectCategory {
+  CONSTRUCTION
+  CONSULTING
+  TECHNOLOGY
+  DESIGN
+  MARKETING
+  OTHER
+}
+
+enum ProjectStatus {
+  OPEN
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+  ON_HOLD
+}
+
+enum ApplicationStatus {
+  PENDING
+  UNDER_REVIEW
+  ACCEPTED
+  REJECTED
+  WITHDRAWN
+}
+
+enum CourseLevel {
+  BEGINNER
+  INTERMEDIATE
+  ADVANCED
+  EXPERT
+}
+
+enum LessonType {
+  TEXT
+  VIDEO
+  AUDIO
+  INTERACTIVE
+  DOWNLOAD
+}
+
+enum AssessmentType {
+  QUIZ
+  ASSIGNMENT
+  PROJECT
+  EXAM
+}
+
+enum EnrollmentStatus {
+  ACTIVE
+  COMPLETED
+  SUSPENDED
+  CANCELLED
+}
+
+enum ReferralStatus {
+  PENDING
+  CONFIRMED
+  PAID
+  EXPIRED
+}
+
+enum EventCategory {
+  GENERAL
+  WORKSHOP
+  WEBINAR
+  NETWORKING
+  CONFERENCE
+  TRAINING
+}
+
+enum RegistrationStatus {
+  REGISTERED
+  ATTENDED
+  CANCELLED
+  WAITLISTED
+  NO_SHOW
+}
+
+enum MessagePriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+enum MessageCategory {
+  GENERAL
+  SUPPORT
+  BILLING
+  TECHNICAL
+  FEEDBACK
+}
+
+enum AnnouncementPriority {
+  LOW
+  NORMAL
+  HIGH
+  CRITICAL
+}
+
+enum ResourceCategory {
+  GENERAL
+  TRAINING
+  TEMPLATES
+  CONTRACTS
+  MARKETING
+  COMPLIANCE
+}
+
+enum ActionSeverity {
+  INFO
+  WARNING
+  ERROR
+  CRITICAL
+}

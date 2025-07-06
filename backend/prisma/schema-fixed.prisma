@@ -1,0 +1,376 @@
+// Fixed Prisma schema with PostgreSQL, proper indexes, and security enhancements
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Enums for type safety
+enum MemberType {
+  REGULAR
+  PREMIUM
+  LIFETIME
+  HONORARY
+  ADMIN
+}
+
+enum RegistrationStatus {
+  REGISTERED
+  ATTENDED
+  CANCELLED
+  WAITLISTED
+  NO_SHOW
+}
+
+enum MessagePriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+enum ActionSeverity {
+  INFO
+  WARNING
+  ERROR
+  CRITICAL
+}
+
+// Enhanced User model with security and RBAC
+model User {
+  id                    String      @id @default(cuid())
+  email                 String      @unique
+  password              String
+  firstName             String
+  lastName              String
+  company               String?
+  phone                 String?
+  address               String?
+  city                  String?
+  state                 String?
+  zipCode               String?
+  memberType            MemberType  @default(REGULAR)
+  memberSince           DateTime    @default(now())
+  membershipExpiresAt   DateTime?
+  isActive              Boolean     @default(true)
+  isVerified            Boolean     @default(false)
+  profileImage          String?
+  bio                   String?
+  website               String?
+  linkedin              String?
+  twitter               String?
+  
+  // Enhanced security fields
+  failedLoginAttempts   Int         @default(0)
+  lockedUntil           DateTime?
+  lastFailedLogin       DateTime?
+  lastSuccessfulLogin   DateTime?
+  twoFactorEnabled      Boolean     @default(false)
+  twoFactorSecret       String?
+  resetToken            String?
+  resetTokenExpiry      DateTime?
+  
+  // Notification preferences
+  emailNotifications    Boolean     @default(true)
+  smsNotifications      Boolean     @default(false)
+  pushNotifications     Boolean     @default(true)
+  
+  // Audit fields
+  createdAt             DateTime    @default(now())
+  updatedAt             DateTime    @updatedAt
+  createdBy             String?
+  lastModifiedBy        String?
+
+  // Relations
+  roles                 UserRole[]
+  events                EventRegistration[]
+  createdEvents         Event[] @relation("EventCreator")
+  messages              Message[] @relation("MessageSender")
+  receivedMessages      Message[] @relation("MessageReceiver")
+  announcements         Announcement[] @relation("AnnouncementCreator")
+  resources             Resource[] @relation("ResourceCreator")
+  adminActions          AdminAction[] @relation("AdminActionUser")
+  auditLogs             AuditLog[] @relation("AuditLogUser")
+
+  // Performance indexes
+  @@index([email])
+  @@index([memberType, isActive])
+  @@index([membershipExpiresAt])
+  @@index([isActive, isVerified])
+  @@index([createdAt])
+  @@map("users")
+}
+
+// RBAC system
+model Role {
+  id          String @id @default(cuid())
+  name        String @unique
+  description String
+  isActive    Boolean @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  users       UserRole[]
+  permissions RolePermission[]
+
+  @@index([name])
+  @@index([isActive])
+  @@map("roles")
+}
+
+model Permission {
+  id          String @id @default(cuid())
+  name        String @unique
+  description String
+  resource    String  // e.g., "users", "events", "payments"
+  action      String  // e.g., "create", "read", "update", "delete"
+  createdAt   DateTime @default(now())
+  
+  roles       RolePermission[]
+
+  @@index([resource, action])
+  @@map("permissions")
+}
+
+model UserRole {
+  id         String @id @default(cuid())
+  userId     String
+  roleId     String
+  assignedAt DateTime @default(now())
+  assignedBy String?
+  
+  user       User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role       Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, roleId])
+  @@index([userId])
+  @@index([roleId])
+  @@map("user_roles")
+}
+
+model RolePermission {
+  id           String @id @default(cuid())
+  roleId       String
+  permissionId String
+  
+  role         Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+  @@index([roleId])
+  @@index([permissionId])
+  @@map("role_permissions")
+}
+
+// Audit logging system
+model AuditLog {
+  id          String    @id @default(cuid())
+  userId      String?
+  action      String
+  resource    String
+  resourceId  String?
+  oldData     Json?
+  newData     Json?
+  ipAddress   String?
+  userAgent   String?
+  timestamp   DateTime  @default(now())
+  
+  user        User? @relation("AuditLogUser", fields: [userId], references: [id])
+
+  @@index([userId, timestamp])
+  @@index([resource, action])
+  @@index([timestamp])
+  @@index([resourceId])
+  @@map("audit_logs")
+}
+
+// Enhanced Event model
+model Event {
+  id            String      @id @default(cuid())
+  title         String
+  description   String
+  startDate     DateTime
+  endDate       DateTime
+  location      String?
+  isVirtual     Boolean     @default(false)
+  meetingLink   String?
+  maxAttendees  Int?
+  isActive      Boolean     @default(true)
+  category      String?
+  price         Decimal     @default(0) @db.Decimal(8,2)
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  createdBy     String
+  
+  creator       User        @relation("EventCreator", fields: [createdBy], references: [id])
+  registrations EventRegistration[]
+
+  @@index([startDate])
+  @@index([category, isActive])
+  @@index([isActive, startDate])
+  @@index([createdBy])
+  @@map("events")
+}
+
+model EventRegistration {
+  id           String              @id @default(cuid())
+  eventId      String
+  userId       String
+  status       RegistrationStatus  @default(REGISTERED)
+  registeredAt DateTime            @default(now())
+  paymentId    String?
+  
+  event        Event               @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, userId])
+  @@index([eventId])
+  @@index([userId, status])
+  @@map("event_registrations")
+}
+
+// Enhanced Message model
+model Message {
+  id         String          @id @default(cuid())
+  senderId   String
+  receiverId String
+  subject    String
+  content    String
+  isRead     Boolean         @default(false)
+  priority   MessagePriority @default(NORMAL)
+  category   String?
+  attachments String[]       @default([])
+  createdAt  DateTime        @default(now())
+  readAt     DateTime?
+  
+  sender     User            @relation("MessageSender", fields: [senderId], references: [id], onDelete: Cascade)
+  receiver   User            @relation("MessageReceiver", fields: [receiverId], references: [id], onDelete: Cascade)
+
+  @@index([receiverId, isRead])
+  @@index([senderId])
+  @@index([createdAt])
+  @@map("messages")
+}
+
+// Enhanced Announcement model
+model Announcement {
+  id        String   @id @default(cuid())
+  title     String
+  content   String
+  priority  String   @default("NORMAL")
+  category  String?
+  isActive  Boolean  @default(true)
+  publishAt DateTime @default(now())
+  expiresAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  createdBy String
+  
+  creator   User     @relation("AnnouncementCreator", fields: [createdBy], references: [id])
+
+  @@index([isActive, publishAt])
+  @@index([category])
+  @@index([expiresAt])
+  @@map("announcements")
+}
+
+// Enhanced Resource model
+model Resource {
+  id            String   @id @default(cuid())
+  title         String
+  description   String?
+  fileUrl       String
+  fileType      String
+  fileSize      Int
+  category      String?
+  tags          String[] @default([])
+  isPublic      Boolean  @default(true)
+  downloadCount Int      @default(0)
+  checksum      String?  // For file integrity
+  virusScanned  Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  createdBy     String
+  
+  creator       User     @relation("ResourceCreator", fields: [createdBy], references: [id])
+
+  @@index([category, isPublic])
+  @@index([fileType])
+  @@index([createdBy])
+  @@index([tags])
+  @@map("resources")
+}
+
+// Enhanced Admin Action model
+model AdminAction {
+  id        String         @id @default(cuid())
+  action    String
+  details   String
+  severity  ActionSeverity @default(INFO)
+  metadata  Json?
+  createdAt DateTime       @default(now())
+  userId    String
+  targetId  String?        // ID of affected resource/user
+  
+  user      User           @relation("AdminActionUser", fields: [userId], references: [id])
+
+  @@index([userId, createdAt])
+  @@index([action])
+  @@index([severity])
+  @@index([targetId])
+  @@map("admin_actions")
+}
+
+// Rate limiting table
+model RateLimit {
+  id        String   @id @default(cuid())
+  identifier String  // IP address or user ID
+  endpoint  String
+  count     Int      @default(1)
+  windowStart DateTime @default(now())
+  
+  @@unique([identifier, endpoint])
+  @@index([identifier, windowStart])
+  @@map("rate_limits")
+}
+
+// Session management for security
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  ipAddress String?
+  userAgent String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  
+  @@index([userId, isActive])
+  @@index([token])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+// File upload tracking
+model FileUpload {
+  id           String   @id @default(cuid())
+  originalName String
+  filename     String   @unique
+  path         String
+  mimetype     String
+  size         Int
+  checksum     String
+  uploadedBy   String
+  isTemporary  Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  expiresAt    DateTime?
+  
+  @@index([uploadedBy])
+  @@index([isTemporary, expiresAt])
+  @@index([checksum])
+  @@map("file_uploads")
+}

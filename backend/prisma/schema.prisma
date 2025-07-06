@@ -1,0 +1,295 @@
+// Enhanced Prisma schema with PostgreSQL, RBAC, and performance optimizations
+// This schema fixes critical security vulnerabilities and performance issues
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  password      String
+  firstName     String
+  lastName      String
+  company       String?
+  phone         String?
+  address       String?
+  city          String?
+  state         String?
+  zipCode       String?
+  memberType    String @default("REGULAR")
+  memberSince   DateTime  @default(now())
+  membershipExpiresAt DateTime?
+  isActive      Boolean   @default(true)
+  isVerified    Boolean   @default(false)
+  profileImage  String?
+  bio           String?
+  website       String?
+  linkedin      String?
+  twitter       String?
+  
+  // Enhanced security fields
+  failedLoginAttempts   Int         @default(0)
+  lockedUntil           DateTime?
+  lastFailedLogin       DateTime?
+  lastSuccessfulLogin   DateTime?
+  twoFactorEnabled      Boolean     @default(false)
+  twoFactorSecret       String?
+  passwordResetToken    String?
+  passwordResetExpires  DateTime?
+  emailVerificationToken String?
+  emailVerificationExpires DateTime?
+  
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // RBAC Relations
+  roles         UserRole[]
+  auditLogs     AuditLog[]
+
+  // Existing Relations
+  events        EventRegistration[]
+  createdEvents Event[] @relation("EventCreator")
+  messages      Message[] @relation("MessageSender")
+  receivedMessages Message[] @relation("MessageReceiver")
+  announcements Announcement[] @relation("AnnouncementCreator")
+  resources     Resource[] @relation("ResourceCreator")
+  adminActions  AdminAction[] @relation("AdminActionUser")
+
+  // Performance indexes
+  @@index([email])
+  @@index([memberType, isActive])
+  @@index([membershipExpiresAt])
+  @@index([createdAt])
+  @@index([failedLoginAttempts, lockedUntil])
+  @@map("users")
+}
+
+// RBAC Models
+model Role {
+  id          String    @id @default(cuid())
+  name        String    @unique
+  description String?
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  users       UserRole[]
+  permissions RolePermission[]
+
+  @@map("roles")
+}
+
+model Permission {
+  id          String    @id @default(cuid())
+  resource    String    // e.g., "users", "events", "admin"
+  action      String    // e.g., "read", "create", "update", "delete"
+  description String?
+  createdAt   DateTime  @default(now())
+
+  roles       RolePermission[]
+
+  @@unique([resource, action])
+  @@index([resource])
+  @@map("permissions")
+}
+
+model UserRole {
+  id        String    @id @default(cuid())
+  userId    String
+  roleId    String
+  assignedAt DateTime @default(now())
+  assignedBy String?
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      Role      @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, roleId])
+  @@index([userId])
+  @@index([roleId])
+  @@map("user_roles")
+}
+
+model RolePermission {
+  id           String    @id @default(cuid())
+  roleId       String
+  permissionId String
+  createdAt    DateTime  @default(now())
+
+  role         Role      @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+  @@index([roleId])
+  @@index([permissionId])
+  @@map("role_permissions")
+}
+
+// Audit and Security Models
+model AuditLog {
+  id          String    @id @default(cuid())
+  userId      String?
+  action      String
+  resource    String
+  resourceId  String?
+  oldData     Json?
+  newData     Json?
+  ipAddress   String?
+  userAgent   String?
+  timestamp   DateTime  @default(now())
+
+  user        User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([action])
+  @@index([resource])
+  @@index([timestamp])
+  @@map("audit_logs")
+}
+
+model Event {
+  id          String    @id @default(cuid())
+  title       String
+  description String
+  startDate   DateTime
+  endDate     DateTime
+  location    String?
+  isVirtual   Boolean   @default(false)
+  meetingLink String?
+  maxAttendees Int?
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  createdBy   String
+  creator     User      @relation("EventCreator", fields: [createdBy], references: [id])
+
+  // Relations
+  registrations EventRegistration[]
+
+  // Performance indexes
+  @@index([isActive, startDate])
+  @@index([createdBy])
+  @@index([createdAt])
+  @@map("events")
+}
+
+model EventRegistration {
+  id        String   @id @default(cuid())
+  eventId   String
+  userId    String
+  status    String @default("REGISTERED")
+  registeredAt DateTime @default(now())
+  
+  event     Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, userId])
+  @@index([eventId])
+  @@index([userId])
+  @@index([status])
+  @@map("event_registrations")
+}
+
+model Message {
+  id        String   @id @default(cuid())
+  senderId  String
+  receiverId String
+  subject   String
+  content   String
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+  
+  sender    User     @relation("MessageSender", fields: [senderId], references: [id], onDelete: Cascade)
+  receiver  User     @relation("MessageReceiver", fields: [receiverId], references: [id], onDelete: Cascade)
+
+  @@index([senderId])
+  @@index([receiverId])
+  @@index([isRead])
+  @@index([createdAt])
+  @@map("messages")
+}
+
+model Announcement {
+  id        String   @id @default(cuid())
+  title     String
+  content   String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  createdBy String
+  creator   User     @relation("AnnouncementCreator", fields: [createdBy], references: [id])
+
+  @@index([isActive, createdAt])
+  @@index([createdBy])
+  @@map("announcements")
+}
+
+model Resource {
+  id          String   @id @default(cuid())
+  title       String
+  description String?
+  fileUrl     String
+  fileType    String
+  fileSize    Int
+  category    String?
+  isPublic    Boolean  @default(true)
+  downloadCount Int    @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  createdBy   String
+  creator     User     @relation("ResourceCreator", fields: [createdBy], references: [id])
+
+  @@index([isPublic, category])
+  @@index([createdBy])
+  @@index([createdAt])
+  @@map("resources")
+}
+
+model AdminAction {
+  id        String   @id @default(cuid())
+  action    String
+  details   String
+  severity  String   @default("INFO") // INFO, WARNING, ERROR, CRITICAL
+  targetId  String?  // ID of the resource being acted upon
+  createdAt DateTime @default(now())
+  userId    String
+  user      User     @relation("AdminActionUser", fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([action])
+  @@index([severity])
+  @@index([createdAt])
+  @@map("admin_actions")
+}
+
+// Enums for better type safety
+enum MemberType {
+  REGULAR
+  PREMIUM
+  LIFETIME
+  HONORARY
+  ADMIN
+}
+
+enum RegistrationStatus {
+  REGISTERED
+  ATTENDED
+  CANCELLED
+  WAITLISTED
+}
+
+enum AuditLogAction {
+  LOGIN
+  LOGOUT
+  CREATE
+  UPDATE
+  DELETE
+  VIEW
+  ADMIN_ACCESS
+  SECURITY_EVENT
+}
